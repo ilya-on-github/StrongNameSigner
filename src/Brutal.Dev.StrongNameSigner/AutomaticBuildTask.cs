@@ -43,7 +43,6 @@ namespace Brutal.Dev.StrongNameSigner
         var newReferences = new List<ITaskItem>();
 
         var outputPath = OutputPath.ItemSpec;
-        var copyLocalPaths = CopyLocalPaths;
 
         var signedAssemblyFolder = Path.GetFullPath(Path.Combine(outputPath, "StrongNameSigner"));
         if (!Directory.Exists(signedAssemblyFolder))
@@ -63,8 +62,6 @@ namespace Brutal.Dev.StrongNameSigner
 
         // key = old reference path, value = new reference path
         var updatedReferencePaths = new Dictionary<string, string>();
-        // 
-        var processedAssemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // 
         var signedAssemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // 
@@ -98,7 +95,6 @@ namespace Brutal.Dev.StrongNameSigner
               updatedReferencePaths[referencedAssemblyInfo.FilePath] = signedAssemblyInfo.FilePath;
             }
 
-            processedAssemblyPaths.Add(signedAssemblyInfo.FilePath);
             chagesMade = true;
           }
           else
@@ -106,18 +102,17 @@ namespace Brutal.Dev.StrongNameSigner
             newReferences.Add(
               new TaskItem(initialReference)
             );
-
-            processedAssemblyPaths.Add(referencedAssemblyInfo.FilePath);
           }
         }
 
         if (chagesMade)
         {
-          var referencesToFix = new HashSet<string>(processedAssemblyPaths, StringComparer.OrdinalIgnoreCase);
-          foreach (var filePath in processedAssemblyPaths)
+          var referencedAssembliesPaths = newReferences.Select(x => x.ItemSpec).ToList();
+          var references = new HashSet<string>(referencedAssembliesPaths, StringComparer.OrdinalIgnoreCase);
+          foreach (var filePath in referencedAssembliesPaths)
           {
             // Go through all the references excluding the file we are working on.
-            foreach (var referencePath in referencesToFix.Where(r => !r.Equals(filePath)))
+            foreach (var referencePath in references.Where(r => !r.Equals(filePath)))
             {
               FixSingleAssemblyReference(filePath, referencePath, snkFilePath, probingPaths);
             }
@@ -130,23 +125,11 @@ namespace Brutal.Dev.StrongNameSigner
           }
         }
 
-        if (copyLocalPaths != null)
+        // update '@(ReferenceCopyLocalPaths)' items
+        if (CopyLocalPaths != null)
         {
-          NewCopyLocalFiles = new ITaskItem[copyLocalPaths.Length];
-          for (var i = 0; i < copyLocalPaths.Length; i++)
-          {
-            if (updatedReferencePaths.TryGetValue(copyLocalPaths[i].ItemSpec, out var updatedPath))
-            {
-              NewCopyLocalFiles[i] = new TaskItem(copyLocalPaths[i])
-              {
-                ItemSpec = updatedPath
-              };
-            }
-            else
-            {
-              NewCopyLocalFiles[i] = copyLocalPaths[i];
-            }
-          }
+          NewCopyLocalFiles = ProcessCopyLocalPaths(CopyLocalPaths, updatedReferencePaths)
+            .ToArray();
         }
 
         SignedAssembliesToReference = newReferences.ToArray();
@@ -161,6 +144,25 @@ namespace Brutal.Dev.StrongNameSigner
       return false;
     }
 
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    // ReSharper disable once MemberCanBePrivate.Global
+    protected IEnumerable<ITaskItem> ProcessCopyLocalPaths(IEnumerable<ITaskItem> copyLocalPaths, IDictionary<string, string> pathsToReplace)
+    {
+      return copyLocalPaths.Select(x =>
+      {
+        var pathWasModified = pathsToReplace.TryGetValue(x.ItemSpec, out var updatedPath);
+        if (pathWasModified)
+        {
+          return new TaskItem(x)
+          {
+            ItemSpec = updatedPath
+          };
+        }
+        
+        return new TaskItem(x);
+      });
+    }
+    
     protected class SignerTaskResult
     {
       public SignerTaskResult(ITaskItem[] signedAssembliesToReference, ITaskItem[] newCopyLocalFiles)
