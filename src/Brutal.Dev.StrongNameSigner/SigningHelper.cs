@@ -162,32 +162,32 @@ namespace Brutal.Dev.StrongNameSigner
     /// <summary>
     /// Gets .NET assembly information.
     /// </summary>
-    /// <param name="assemblyPath">The path to an assembly you want to get information from.</param>
+    /// <param name="assemblyFilePath">The path to an assembly you want to get information from.</param>
     /// <param name="probingPaths">Additional paths to probe for references.</param>
     /// <returns>
     /// The assembly information.
     /// </returns>
     /// <exception cref="System.ArgumentNullException">assemblyPath parameter was not provided.</exception>
     /// <exception cref="System.IO.FileNotFoundException">Could not find provided assembly file.</exception>
-    public static AssemblyInfo GetAssemblyInfo(string assemblyPath, params string[] probingPaths)
+    public static AssemblyInfo GetAssemblyInfo(string assemblyFilePath, params string[] probingPaths)
     {
       // Verify assembly path was passed in.
-      if (string.IsNullOrWhiteSpace(assemblyPath))
+      if (string.IsNullOrWhiteSpace(assemblyFilePath))
       {
-        throw new ArgumentNullException("assemblyPath");
+        throw new ArgumentNullException(nameof(assemblyFilePath));
       }
 
       // Make sure the file actually exists.
-      if (!File.Exists(assemblyPath))
+      if (!File.Exists(assemblyFilePath))
       {
-        throw new FileNotFoundException("Could not find provided assembly file.", assemblyPath);
+        throw new FileNotFoundException("Could not find provided assembly file.", assemblyFilePath);
       }
 
       var a = new KeyValuePair<string, AssemblyInfo>(null, null);
-      if (AssemblyInfoCache.ContainsKey(assemblyPath) && AssemblyInfoCache.TryGetValue(assemblyPath, out a) &&
-          !GetFileMD5Hash(assemblyPath).Equals(a.Key, StringComparison.OrdinalIgnoreCase))  // Check if the file contents have changed.
+      if (AssemblyInfoCache.ContainsKey(assemblyFilePath) && AssemblyInfoCache.TryGetValue(assemblyFilePath, out a) &&
+          !GetFileMD5Hash(assemblyFilePath).Equals(a.Key, StringComparison.OrdinalIgnoreCase))  // Check if the file contents have changed.
       {
-        AssemblyInfoCache.TryRemove(assemblyPath, out a);
+        AssemblyInfoCache.TryRemove(assemblyFilePath, out a);
 
         // Overwrite with a blank version.
         a = new KeyValuePair<string, AssemblyInfo>(null, null);
@@ -195,11 +195,11 @@ namespace Brutal.Dev.StrongNameSigner
 
       if (a.Value == null)
       {
-        using (var definition = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath, probingPaths)))
+        using (var definition = AssemblyDefinition.ReadAssembly(assemblyFilePath, GetReadParameters(assemblyFilePath, probingPaths)))
         {
-          var info = new AssemblyInfo()
+          var info = new AssemblyInfo
           {
-            FilePath = Path.GetFullPath(assemblyPath),
+            FilePath = Path.GetFullPath(assemblyFilePath),
             DotNetVersion = GetDotNetVersion(definition.MainModule.Runtime),
             IsSigned = definition.MainModule.Attributes.HasFlag(ModuleAttributes.StrongNameSigned),
             IsManagedAssembly = definition.MainModule.Attributes.HasFlag(ModuleAttributes.ILOnly),
@@ -208,8 +208,8 @@ namespace Brutal.Dev.StrongNameSigner
             Is32BitPreferred = definition.MainModule.Attributes.HasFlag(ModuleAttributes.Preferred32Bit)
           };
 
-          a = new KeyValuePair<string, AssemblyInfo>(GetFileMD5Hash(assemblyPath), info);
-          AssemblyInfoCache.TryAdd(assemblyPath, a);
+          a = new KeyValuePair<string, AssemblyInfo>(GetFileMD5Hash(assemblyFilePath), info);
+          AssemblyInfoCache.TryAdd(assemblyFilePath, a);
         }
       }
 
