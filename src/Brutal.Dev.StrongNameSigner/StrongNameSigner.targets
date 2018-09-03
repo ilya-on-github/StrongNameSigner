@@ -3,10 +3,10 @@
   <UsingTask TaskName="Brutal.Dev.StrongNameSigner.AutomaticBuildTask" AssemblyFile="$(MSBuildThisFileDirectory)Brutal.Dev.StrongNameSigner.dll" />
 
   <Target Name="StrongNameSignerTarget" AfterTargets="AfterResolveReferences">
-    <Brutal.Dev.StrongNameSigner.AutomaticBuildTask References="@(ReferencePath)" CopyLocalPaths="@(ReferenceCopyLocalPaths)" OutputPath="$(IntermediateOutputPath)">
+    <Brutal.Dev.StrongNameSigner.LoggingSignerBuildTask References="@(ReferencePath)" CopyLocalPaths="@(ReferenceCopyLocalPaths)" OutputPath="$(IntermediateOutputPath)">
       <Output TaskParameter="SignedAssembliesToReference" ItemName="AssembliesToReference" />
       <Output TaskParameter="NewCopyLocalFiles" ItemName="NewCopyLocalFiles" />
-    </Brutal.Dev.StrongNameSigner.AutomaticBuildTask>
+    </Brutal.Dev.StrongNameSigner.LoggingSignerBuildTask>
 
     <ItemGroup>
       <ReferencePath Remove="@(ReferencePath)" />

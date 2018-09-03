@@ -74,6 +74,7 @@
     <Compile Include="ForceAssemblyReferenceAttribute.cs" />
     <Compile Include="LoggingSignerBuildTask.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="ReferenceInfo.cs" />
     <Compile Include="SigningHelper.cs" />
   </ItemGroup>
   <ItemGroup>

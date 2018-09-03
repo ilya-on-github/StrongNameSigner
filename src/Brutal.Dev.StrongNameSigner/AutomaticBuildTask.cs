@@ -27,126 +27,137 @@ namespace Brutal.Dev.StrongNameSigner
     {
       var chagesMade = false;
 
-      try
+      if (References == null || References.Length == 0)
       {
-        if (References == null || References.Length == 0)
-        {
-          return true;
-        }
-
-        if (OutputPath == null || string.IsNullOrEmpty(OutputPath.ItemSpec))
-        {
-          throw new ArgumentException("Task parameter 'OutputPath' not provided.", nameof(OutputPath));
-        }
-
-        var initialReferences = References;
-        var newReferences = new List<ITaskItem>();
-
-        var outputPath = OutputPath.ItemSpec;
-
-        var signedAssemblyFolder = Path.GetFullPath(Path.Combine(outputPath, "StrongNameSigner"));
-        if (!Directory.Exists(signedAssemblyFolder))
-        {
-          Directory.CreateDirectory(signedAssemblyFolder);
-        }
-
-        var snkFilePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location),
-          "StrongNameSigner.snk");
-        if (!File.Exists(snkFilePath))
-        {
-          File.WriteAllBytes(snkFilePath, SigningHelper.GenerateStrongNameKeyPair());
-        }
-
-        Log.LogMessage(MessageImportance.Normal, "Signed Assembly Directory: {0}", signedAssemblyFolder);
-        Log.LogMessage(MessageImportance.Normal, "SNK File Path: {0}", snkFilePath);
-
-        // key = old reference path, value = new reference path
-        var updatedReferencePaths = new Dictionary<string, string>();
-        // 
-        var signedAssemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // 
-        var probingPaths = initialReferences.Select(r => Path.GetDirectoryName(r.ItemSpec)).Distinct()
-          .ToArray();
-
-        foreach (var initialReference in initialReferences)
-        {
-          var referencedAssemblyInfo = SigningHelper.GetAssemblyInfo(
-            // ReSharper disable once ArgumentsStyleNamedExpression
-            assemblyFilePath: initialReference.ItemSpec
-          );
-
-          if (!referencedAssemblyInfo.IsSigned)
-          {
-            var signedAssemblyInfo =
-              SignSingleAssembly(initialReference.ItemSpec, snkFilePath, signedAssemblyFolder,
-                probingPaths);
-
-            signedAssemblyPaths.Add(signedAssemblyInfo.FilePath);
-
-            newReferences.Add(
-              new TaskItem(initialReference)
-              {
-                ItemSpec = signedAssemblyInfo.FilePath
-              }
-            );
-
-            if (signedAssemblyInfo.FilePath != referencedAssemblyInfo.FilePath)
-            {
-              updatedReferencePaths[referencedAssemblyInfo.FilePath] = signedAssemblyInfo.FilePath;
-            }
-
-            chagesMade = true;
-          }
-          else
-          {
-            newReferences.Add(
-              new TaskItem(initialReference)
-            );
-          }
-        }
-
-        if (chagesMade)
-        {
-          var referencedAssembliesPaths = newReferences.Select(x => x.ItemSpec).ToList();
-          var references = new HashSet<string>(referencedAssembliesPaths, StringComparer.OrdinalIgnoreCase);
-          foreach (var filePath in referencedAssembliesPaths)
-          {
-            // Go through all the references excluding the file we are working on.
-            foreach (var referencePath in references.Where(r => !r.Equals(filePath)))
-            {
-              FixSingleAssemblyReference(filePath, referencePath, snkFilePath, probingPaths);
-            }
-          }
-
-          // Remove all InternalsVisibleTo attributes without public keys from the processed assemblies. Signed assemblies cannot have unsigned friend assemblies.
-          foreach (var filePath in signedAssemblyPaths)
-          {
-            RemoveInvalidFriendAssemblyReferences(filePath, snkFilePath, probingPaths);
-          }
-        }
-
-        // update '@(ReferenceCopyLocalPaths)' items
-        if (CopyLocalPaths != null)
-        {
-          NewCopyLocalFiles = ProcessCopyLocalPaths(CopyLocalPaths, updatedReferencePaths)
-            .ToArray();
-        }
-
-        SignedAssembliesToReference = newReferences.ToArray();
-
         return true;
       }
-      catch (Exception ex)
+
+      if (OutputPath == null || string.IsNullOrEmpty(OutputPath.ItemSpec))
       {
-        Log.LogErrorFromException(ex, true);
+        throw new ArgumentException("Task parameter 'OutputPath' not provided.", nameof(OutputPath));
       }
 
-      return false;
+      var outputDirectory = OutputPath.ItemSpec;
+
+      var signedAssemblyFolder = Path.GetFullPath(Path.Combine(outputDirectory, "StrongNameSigner"));
+      if (!Directory.Exists(signedAssemblyFolder))
+      {
+        Directory.CreateDirectory(signedAssemblyFolder);
+      }
+
+      // ReSharper disable once AssignNullToNotNullAttribute
+      var snkFilePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location),
+        "StrongNameSigner.snk");
+      if (!File.Exists(snkFilePath))
+      {
+        File.WriteAllBytes(snkFilePath, SigningHelper.GenerateStrongNameKeyPair());
+      }
+
+      Log.LogMessage(MessageImportance.Normal, "Signed Assembly Directory: {0}", signedAssemblyFolder);
+      Log.LogMessage(MessageImportance.Normal, "SNK File Path: {0}", snkFilePath);
+
+      var initialReferences = ReadReferences(References)
+        .ToList();
+
+      var probingPaths = initialReferences.Select(r => Path.GetDirectoryName(r.TaskItem.ItemSpec))
+        .Distinct()
+        .ToArray();
+
+      var initiallySignedAssemblies = initialReferences
+        .Where(x => x.AssemblyInfo.IsSigned)
+        .ToList();
+
+      var signedAssemblies = initialReferences
+        .Where(x => !x.AssemblyInfo.IsSigned)
+        .Select(x => new
+        {
+          InitialReference = x,
+          NewReference = CreateSignedReference(x, snkFilePath, outputDirectory, probingPaths)
+        })
+        .ToList();
+
+      var finalReferences = initiallySignedAssemblies
+        .Concat(signedAssemblies.Select(x => x.NewReference))
+        .ToList();
+
+      if (signedAssemblies.Any())
+      {
+        var assemblies = new HashSet<string>(finalReferences.Select(x => x.AssemblyInfo.FilePath));
+        foreach (var assembly in assemblies)
+        {
+          var otherAssemblies = assemblies.Where(r => !r.Equals(assembly));
+          foreach (var otherAssembly in otherAssemblies)
+          {
+            SigningHelper.FixAssemblyReference(assembly, otherAssembly, snkFilePath, null, probingPaths);
+          }
+        }
+
+        // Remove all InternalsVisibleTo attributes without public keys from the processed assemblies. Signed assemblies cannot have unsigned friend assemblies.
+        foreach (var filePath in new HashSet<string>(
+          signedAssemblies.Select(x => x.NewReference.AssemblyInfo.FilePath), StringComparer.OrdinalIgnoreCase))
+        {
+          RemoveInvalidFriendAssemblyReferences(filePath, snkFilePath, probingPaths);
+        }
+      }
+
+      // update '@(ReferenceCopyLocalPaths)' items
+      if (CopyLocalPaths != null)
+      {
+        // key = old reference path, value = new reference path
+        var changedPaths = signedAssemblies
+          .ToDictionary(
+            x => x.InitialReference.AssemblyInfo.FilePath,
+            x => x.NewReference.AssemblyInfo.FilePath
+          );
+
+        NewCopyLocalFiles = ProcessCopyLocalPaths(CopyLocalPaths, changedPaths)
+          .ToArray();
+      }
+
+      SignedAssembliesToReference = finalReferences
+        .Select(x => x.TaskItem)
+        .ToArray();
+
+      return true;
+    }
+
+    /// <summary>
+    /// Reads <see cref="ITaskItem"/> references, returns an instance of <see cref="ReferenceInfo"/> for each item in <paramref name="references"/>.
+    /// </summary>
+    /// <param name="references"></param>
+    /// <returns></returns>
+    protected virtual IEnumerable<ReferenceInfo> ReadReferences(IEnumerable<ITaskItem> references)
+    {
+      return references.Select(x => new ReferenceInfo(x, SigningHelper.GetAssemblyInfo(x.ItemSpec)));
+    }
+
+    /// <summary>
+    /// Creates signed reference fot <paramref name="reference"/>.
+    /// Signs the assembly with the <paramref name="snkFilePath"/>, places into <paramref name="outputDirectory"/> and
+    /// returns an instance of <see cref="ReferenceInfo"/> pointing at the assembly created.
+    /// </summary>
+    /// <param name="reference"></param>
+    /// <param name="snkFilePath"></param>
+    /// <param name="outputDirectory"></param>
+    /// <param name="probingPaths"></param>
+    /// <returns></returns>
+    protected virtual ReferenceInfo CreateSignedReference(ReferenceInfo reference,
+      string snkFilePath, string outputDirectory, params string[] probingPaths)
+    {
+      var signedAssembly =
+        SignSingleAssembly(reference.AssemblyInfo.FilePath, snkFilePath, outputDirectory, probingPaths);
+
+      // the same task item, but the path (ItemSpec) points to the signed assembly
+      return new ReferenceInfo(new TaskItem(reference.TaskItem)
+      {
+        ItemSpec = signedAssembly.FilePath
+      }, signedAssembly);
     }
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
     // ReSharper disable once MemberCanBePrivate.Global
-    protected IEnumerable<ITaskItem> ProcessCopyLocalPaths(IEnumerable<ITaskItem> copyLocalPaths, IDictionary<string, string> pathsToReplace)
+    protected virtual IEnumerable<ITaskItem> ProcessCopyLocalPaths(IEnumerable<ITaskItem> copyLocalPaths,
+      IDictionary<string, string> pathsToReplace)
     {
       return copyLocalPaths.Select(x =>
       {
@@ -158,28 +169,9 @@ namespace Brutal.Dev.StrongNameSigner
             ItemSpec = updatedPath
           };
         }
-        
+
         return new TaskItem(x);
       });
-    }
-    
-    protected class SignerTaskResult
-    {
-      public SignerTaskResult(ITaskItem[] signedAssembliesToReference, ITaskItem[] newCopyLocalFiles)
-      {
-        SignedAssembliesToReference = signedAssembliesToReference;
-        NewCopyLocalFiles = newCopyLocalFiles;
-      }
-
-      public ITaskItem[] SignedAssembliesToReference { get; }
-
-      public ITaskItem[] NewCopyLocalFiles { get; }
-    }
-
-    protected virtual SignerTaskResult Sign(ITaskItem[] references, ITaskItem outputPath,
-      ITaskItem[] copyLocalPaths)
-    {
-      throw new NotImplementedException();
     }
 
     private AssemblyInfo SignSingleAssembly(string assemblyPath, string keyPath, string outputDirectory,
@@ -215,35 +207,6 @@ namespace Brutal.Dev.StrongNameSigner
       }
 
       return null;
-    }
-
-    private void FixSingleAssemblyReference(string assemblyPath, string referencePath, string keyFile,
-      params string[] probingPaths)
-    {
-      try
-      {
-        Log.LogMessage(MessageImportance.Low, string.Empty);
-        Log.LogMessage(MessageImportance.Low, "Fixing references to '{1}' in '{0}'...", assemblyPath,
-          referencePath);
-
-        if (SigningHelper.FixAssemblyReference(assemblyPath, referencePath, keyFile, null, probingPaths))
-        {
-          Log.LogMessage(MessageImportance.Normal, "References to '{1}' in '{0}' were fixed successfully.",
-            assemblyPath, referencePath);
-        }
-        else
-        {
-          Log.LogMessage(MessageImportance.Low, "No assembly references to fix in '{0}'...", assemblyPath);
-        }
-      }
-      catch (BadImageFormatException bife)
-      {
-        Log.LogWarningFromException(bife, true);
-      }
-      catch (Exception ex)
-      {
-        Log.LogErrorFromException(ex, true, true, null);
-      }
     }
 
     private void RemoveInvalidFriendAssemblyReferences(string assemblyPath, string keyFile,
